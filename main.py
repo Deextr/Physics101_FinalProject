@@ -1,387 +1,202 @@
 import pygame
 import math
-import random
+from config import *
+from physics import *
+from rendering import *
+from game_state import GameState
 
+# Initialize pygame
 pygame.init()
-WIDTH, HEIGHT = pygame.display.get_desktop_sizes()[0]
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
-pygame.display.set_caption("Racing Game")
+pygame.display.set_caption("Physics Racing Game")
 clock = pygame.time.Clock()
 
-# Track - Scaled for fullscreen
-CENTER = (WIDTH // 2, HEIGHT // 2)
-# Scale based on screen size
-SCALE_FACTOR = min(WIDTH, HEIGHT) / 800
-INNER_R = int(180 * SCALE_FACTOR)
-OUTER_R = int(320 * SCALE_FACTOR)
-CENTER_R = (INNER_R + OUTER_R) / 2
+# Game state
+game = GameState()
 
-# Car physics
-r = CENTER_R
-theta = 0
-speed = 0
-stability_factor = 0.02
-previous_theta = 0
-completed_revolutions = 0
-
-# Speed limits
-MIN_SPEED = 40
-MAX_SPEED = 140
-DRIFT_FACTOR = 0.01
-
-# Start and Finish lines (at theta = 0 and theta = pi)
-START_FINISH_THETA = 0
-SAFE_ZONE = math.pi / 6  # 30 degrees on each side of start/finish
-
-# Obstacles - Traffic cones
-NUM_OBSTACLES = 6
-
-def generate_obstacles():
-    """Generate random obstacles avoiding the start/finish line"""
-    new_obstacles = []
-    for _ in range(NUM_OBSTACLES):
-        valid = False
-        while not valid:
-            obs_theta = random.uniform(0, 2*math.pi)
-            # Check if obstacle is in safe zone around start/finish line
-            angle_diff = abs(obs_theta - START_FINISH_THETA)
-            # Handle wrap-around
-            if angle_diff > math.pi:
-                angle_diff = 2*math.pi - angle_diff
-            if angle_diff > SAFE_ZONE:
-                valid = True
-        obs_r = random.uniform(INNER_R + 15, OUTER_R - 15)
-        new_obstacles.append((obs_r, obs_theta))
-    return new_obstacles
-
-obstacles = generate_obstacles()
-
-OBSTACLE_SIZE = int(20 * SCALE_FACTOR)
-
-def draw_car(surface, x, y, angle, color=(220, 50, 50)):
-    """Draw a top-down car sprite"""
-    car_length = int(35 * SCALE_FACTOR)
-    car_width = int(22 * SCALE_FACTOR)
-    
-    # Create car surface
-    car_surf = pygame.Surface((car_length, car_width), pygame.SRCALPHA)
-    
-    # Main body (red)
-    pygame.draw.rect(car_surf, color, (int(5*SCALE_FACTOR), int(2*SCALE_FACTOR), car_length-int(10*SCALE_FACTOR), car_width-int(4*SCALE_FACTOR)))
-    pygame.draw.rect(car_surf, color, (0, int(4*SCALE_FACTOR), car_length, car_width-int(8*SCALE_FACTOR)))
-    
-    # Windshield (darker blue)
-    pygame.draw.rect(car_surf, (100, 150, 200), (int(6*SCALE_FACTOR), int(4*SCALE_FACTOR), int(8*SCALE_FACTOR), car_width-int(8*SCALE_FACTOR)))
-    
-    # Rear window
-    pygame.draw.rect(car_surf, (100, 150, 200), (car_length-int(12*SCALE_FACTOR), int(4*SCALE_FACTOR), int(6*SCALE_FACTOR), car_width-int(8*SCALE_FACTOR)))
-    
-    # Wheels (black)
-    wheel_w = int(5 * SCALE_FACTOR)
-    wheel_h = int(8 * SCALE_FACTOR)
-    # Front wheels
-    pygame.draw.rect(car_surf, (30, 30, 30), (int(3*SCALE_FACTOR), 0, wheel_w, wheel_h))
-    pygame.draw.rect(car_surf, (30, 30, 30), (int(3*SCALE_FACTOR), car_width-wheel_h, wheel_w, wheel_h))
-    # Rear wheels
-    pygame.draw.rect(car_surf, (30, 30, 30), (car_length-int(7*SCALE_FACTOR), 0, wheel_w, wheel_h))
-    pygame.draw.rect(car_surf, (30, 30, 30), (car_length-int(7*SCALE_FACTOR), car_width-wheel_h, wheel_w, wheel_h))
-    
-    # Headlights (yellow)
-    pygame.draw.circle(car_surf, (255, 255, 100), (int(2*SCALE_FACTOR), int(5*SCALE_FACTOR)), int(3*SCALE_FACTOR))
-    pygame.draw.circle(car_surf, (255, 255, 100), (int(2*SCALE_FACTOR), car_width-int(5*SCALE_FACTOR)), int(3*SCALE_FACTOR))
-    
-    # Rotate car to face direction of travel
-    rotated = pygame.transform.rotate(car_surf, -math.degrees(angle) + 90)
-    rect = rotated.get_rect(center=(x, y))
-    surface.blit(rotated, rect)
-
-def draw_traffic_cone(surface, x, y):
-    """Draw a traffic cone obstacle"""
-    cone_height = int(18 * SCALE_FACTOR)
-    cone_base = int(12 * SCALE_FACTOR)
-    points = [
-        (x, y - cone_height),  # top
-        (x - cone_base, y + cone_base),  # bottom left
-        (x + cone_base, y + cone_base)   # bottom right
-    ]
-    # Orange cone
-    pygame.draw.polygon(surface, (255, 140, 0), points)
-    # White stripe
-    stripe_w = int(8 * SCALE_FACTOR)
-    pygame.draw.line(surface, (255, 255, 255), (x - stripe_w, y), (x + stripe_w, y), max(2, int(3*SCALE_FACTOR)))
-
-def draw_background(surface, frame_count):
-    """Draw animated background with sky, clouds, and scenery"""
-    # Fill entire screen with light blue first to ensure no black edges
-    surface.fill((135, 206, 250))
-    
-    # Sky gradient (light blue to darker blue) - ensure it covers entire width
-    for i in range(HEIGHT):
-        blue_value = 180 - int(i / HEIGHT * 50)
-        color = (135, 206, min(250, blue_value))
-        pygame.draw.line(surface, color, (0, i), (WIDTH, i), 1)
-    
-    # Animated clouds
-    cloud_positions = [
-        (WIDTH * 0.2 + (frame_count * 0.3) % WIDTH, HEIGHT * 0.15),
-        (WIDTH * 0.5 + (frame_count * 0.2) % WIDTH, HEIGHT * 0.1),
-        (WIDTH * 0.8 + (frame_count * 0.25) % WIDTH, HEIGHT * 0.2),
-    ]
-    
-    for cx, cy in cloud_positions:
-        # Wrap around
-        cloud_x = cx if cx < WIDTH else cx - WIDTH
-        # Draw fluffy cloud
-        cloud_radius = int(40 * SCALE_FACTOR)
-        pygame.draw.circle(surface, (255, 255, 255), (int(cloud_x), int(cy)), cloud_radius)
-        pygame.draw.circle(surface, (255, 255, 255), (int(cloud_x - 30 * SCALE_FACTOR), int(cy + 10 * SCALE_FACTOR)), int(35 * SCALE_FACTOR))
-        pygame.draw.circle(surface, (255, 255, 255), (int(cloud_x + 30 * SCALE_FACTOR), int(cy + 10 * SCALE_FACTOR)), int(30 * SCALE_FACTOR))
-    
-    # Draw grass area (larger than track)
-    grass_radius = int(OUTER_R * 1.8)
-    pygame.draw.circle(surface, (40, 150, 40), CENTER, grass_radius)
-    
-    # Draw trees around the track
-    tree_distance = int(OUTER_R * 1.4)
-    num_trees = 16
-    for i in range(num_trees):
-        angle = (2 * math.pi * i) / num_trees
-        tree_x = CENTER[0] + tree_distance * math.cos(angle)
-        tree_y = CENTER[1] + tree_distance * math.sin(angle)
-        # Tree trunk
-        trunk_width = int(12 * SCALE_FACTOR)
-        trunk_height = int(30 * SCALE_FACTOR)
-        pygame.draw.rect(surface, (101, 67, 33), 
-                        (int(tree_x - trunk_width/2), int(tree_y - trunk_height/2), trunk_width, trunk_height))
-        # Tree foliage (3 circles for fluffy look)
-        foliage_radius = int(25 * SCALE_FACTOR)
-        pygame.draw.circle(surface, (34, 139, 34), (int(tree_x), int(tree_y - trunk_height/2 - foliage_radius/2)), foliage_radius)
-        pygame.draw.circle(surface, (34, 139, 34), (int(tree_x - foliage_radius/2), int(tree_y - trunk_height/2)), int(foliage_radius * 0.8))
-        pygame.draw.circle(surface, (34, 139, 34), (int(tree_x + foliage_radius/2), int(tree_y - trunk_height/2)), int(foliage_radius * 0.8))
-    
-    # Draw grandstands
-    stand_positions = [(WIDTH * 0.15, HEIGHT * 0.5), (WIDTH * 0.85, HEIGHT * 0.5)]
-    for sx, sy in stand_positions:
-        stand_width = int(100 * SCALE_FACTOR)
-        stand_height = int(60 * SCALE_FACTOR)
-        # Stand structure
-        pygame.draw.rect(surface, (150, 150, 150), (int(sx - stand_width/2), int(sy), stand_width, stand_height))
-        # Rows
-        for row in range(4):
-            row_y = sy + row * stand_height // 4
-            pygame.draw.line(surface, (100, 100, 100), (int(sx - stand_width/2), int(row_y)), 
-                           (int(sx + stand_width/2), int(row_y)), 2)
-        # Roof
-        pygame.draw.polygon(surface, (180, 50, 50), [
-            (int(sx - stand_width/2 - 10 * SCALE_FACTOR), int(sy)),
-            (int(sx + stand_width/2 + 10 * SCALE_FACTOR), int(sy)),
-            (int(sx), int(sy - 30 * SCALE_FACTOR))
-        ])
-
-def draw_racetrack(surface):
-    """Draw a detailed racetrack"""
-    # Track is now drawn on top of background
-    
-    # Outer track border (darker)
-    border_width = int(20 * SCALE_FACTOR)
-    pygame.draw.circle(surface, (30, 30, 30), CENTER, OUTER_R + border_width)
-    
-    # Track surface (asphalt)
-    pygame.draw.circle(surface, (50, 50, 50), CENTER, OUTER_R)
-    
-    # Inner grass circle
-    pygame.draw.circle(surface, (40, 150, 40), CENTER, INNER_R)
-    
-    # Track lines
-    # Outer white line
-    line_width = max(3, int(5 * SCALE_FACTOR))
-    pygame.draw.circle(surface, (255, 255, 255), CENTER, OUTER_R, line_width)
-    # Inner white line
-    pygame.draw.circle(surface, (255, 255, 255), CENTER, INNER_R, line_width)
-    
-    # Center dashed line (yellow)
-    num_dashes = 50
-    dash_width = max(2, int(3 * SCALE_FACTOR))
-    for i in range(num_dashes):
-        angle = (2 * math.pi * i) / num_dashes
-        if i % 2 == 0:  # Draw every other dash
-            x1 = CENTER[0] + CENTER_R * math.cos(angle)
-            y1 = CENTER[1] + CENTER_R * math.sin(angle)
-            angle2 = (2 * math.pi * (i + 0.5)) / num_dashes
-            x2 = CENTER[0] + CENTER_R * math.cos(angle2)
-            y2 = CENTER[1] + CENTER_R * math.sin(angle2)
-            pygame.draw.line(surface, (255, 255, 100), (x1, y1), (x2, y2), dash_width)
-    
-    # Draw starting and finish lines
-    line_thickness = max(8, int(12 * SCALE_FACTOR))
-    
-    # Starting line (bright green)
-    start_x1 = CENTER[0] + INNER_R * math.cos(START_FINISH_THETA)
-    start_y1 = CENTER[1] + INNER_R * math.sin(START_FINISH_THETA)
-    start_x2 = CENTER[0] + OUTER_R * math.cos(START_FINISH_THETA)
-    start_y2 = CENTER[1] + OUTER_R * math.sin(START_FINISH_THETA)
-    pygame.draw.line(surface, (0, 200, 0), (start_x1, start_y1), (start_x2, start_y2), line_thickness)
-
-def draw_game_over_menu(surface, game_over_reason, laps):
-    """Draw game over screen with menu options"""
-    # Semi-transparent overlay
-    overlay = pygame.Surface((WIDTH, HEIGHT))
-    overlay.set_alpha(200)
-    overlay.fill((0, 0, 0))
-    surface.blit(overlay, (0, 0))
-    
-    # Title
-    title_font = pygame.font.SysFont(None, int(80 * SCALE_FACTOR), bold=True)
-    title = title_font.render("GAME OVER", True, (255, 0, 0))
-    title_rect = title.get_rect(center=(CENTER[0], CENTER[1] - int(200 * SCALE_FACTOR)))
-    surface.blit(title, title_rect)
-    
-    # Reason text
-    reason_font = pygame.font.SysFont(None, int(40 * SCALE_FACTOR))
-    reason = reason_font.render(game_over_reason, True, (255, 200, 0))
-    reason_rect = reason.get_rect(center=(CENTER[0], CENTER[1] - int(100 * SCALE_FACTOR)))
-    surface.blit(reason, reason_rect)
-    
-    # Laps text
-    laps_font = pygame.font.SysFont(None, int(40 * SCALE_FACTOR))
-    laps_text = laps_font.render(f"Total Laps Completed: {laps}", True, (100, 200, 255))
-    laps_rect = laps_text.get_rect(center=(CENTER[0], CENTER[1]))
-    surface.blit(laps_text, laps_rect)
-    
-    # Menu options
-    button_font = pygame.font.SysFont(None, int(45 * SCALE_FACTOR), bold=True)
-    button_y_offset = int(150 * SCALE_FACTOR)
-    
-    # Try Again button
-    try_again = button_font.render("SPACE - Try Again", True, (0, 255, 0))
-    try_again_rect = try_again.get_rect(center=(CENTER[0], CENTER[1] + button_y_offset))
-    surface.blit(try_again, try_again_rect)
-    
-    # Exit button
-    exit_btn = button_font.render("ESC - Exit", True, (255, 100, 100))
-    exit_rect = exit_btn.get_rect(center=(CENTER[0], CENTER[1] + button_y_offset + int(80 * SCALE_FACTOR)))
-    surface.blit(exit_btn, exit_rect)
-
-def reset_game():
-    """Reset game variables for a new game"""
-    global r, theta, speed, previous_theta, completed_revolutions, obstacles
-    r = CENTER_R
-    theta = 0
-    speed = 0
-    previous_theta = 0
-    completed_revolutions = 0
-    obstacles = generate_obstacles()
-
-running = True
-game_active = True
-game_over_reason = ""
-frame_count = 0
-
-while running:
+# Main game loop
+while game.running:
     dt = clock.tick(60) / 1.0
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            running = False
+            game.running = False
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                if game_active:
-                    running = False
+                if game.game_active:
+                    game.running = False
                 else:
-                    running = False
+                    game.running = False
             if event.key == pygame.K_SPACE:
-                if not game_active:
-                    game_active = True
-                    reset_game()
+                if not game.game_active:
+                    game.reset()
+            # Runtime controls
+            if event.key == pygame.K_m:
+                game.mass += 0.5
+                if game.mass > 50:
+                    game.mass = 50
+            if event.key == pygame.K_n:
+                game.mass -= 0.5
+                if game.mass < 0.1:
+                    game.mass = 0.1
+            if event.key == pygame.K_RIGHTBRACKET:  # ] increase scale
+                game.pixels_per_meter += 5
+            if event.key == pygame.K_LEFTBRACKET:   # [ decrease scale
+                game.pixels_per_meter = max(5.0, game.pixels_per_meter - 5)
 
-    if game_active:
+    if game.game_active:
         # Controls
         keys = pygame.key.get_pressed()
         
-        # Acceleration and braking (forward/backward movement along track)
+        # Acceleration
         if keys[pygame.K_UP]:
-            speed += 0.5
+            game.speed += 0.5
         if keys[pygame.K_DOWN]:
-            speed -= 0.5
-        speed = max(0, min(speed, 200))
+            game.speed -= 0.5
+        game.speed = max(0, min(game.speed, 200))
         
-        # Left and right arrows move inward/outward on the track
+        # Steering (Radius change)
         if keys[pygame.K_LEFT]:
-            r -= 1.5  # Move inward (toward center)
+            game.r -= 1.5  # Move inward
         if keys[pygame.K_RIGHT]:
-            r += 1.5  # Move outward (away from center)
+            game.r += 1.5  # Move outward
 
-        # Update angle based on speed (movement along the circular track)
-        theta += (speed / r) * 0.05
+        # Update theta
+        game.theta += (game.speed / game.r) * 0.05
+
+        # Lap detection
+        if game.theta >= 2 * math.pi:
+            game.completed_revolutions += 1
+            game.theta -= 2 * math.pi
+            print(f"Lap completed! Total laps: {game.completed_revolutions}")
+            game.obstacles = game.generate_obstacles()
+
+        # Physics calculations
+        dt_s = max(dt / 1000.0, 1/240.0)
         
-        # Detect lap completion
-        if theta >= 2 * math.pi:
-            completed_revolutions += 1
-            theta -= 2 * math.pi
-            print(f"Lap completed! Total laps: {completed_revolutions}")
-            obstacles = generate_obstacles()
+        omega, v_phys, v_m_s, a_c_m, T = calculate_physics_values(
+            game.r, game.theta, game.previous_theta, dt_s, game.pixels_per_meter
+        )
         
-        previous_theta = theta
+        # Calculate Force
+        F_c = game.mass * a_c_m
+
+        game.previous_theta = game.theta
 
         # Drift physics
-        if speed < MIN_SPEED:
-            r -= (MIN_SPEED - speed) * DRIFT_FACTOR
-        elif speed > MAX_SPEED:
-            r += (speed - MAX_SPEED) * DRIFT_FACTOR
-        else:
-            r += (CENTER_R - r) * stability_factor
+        game.r = apply_drift_physics(game.r, game.speed)
 
-        # Check track limits
-        if r < INNER_R or r > OUTER_R:
-            game_over_reason = "You fell off the track!"
-            game_active = False
+        # Check limits
+        is_safe, reason = check_track_bounds(game.r)
+        if not is_safe:
+            game.game_over_reason = reason
+            game.game_active = False
 
-        # Convert polar to cartesian
-        x = CENTER[0] + r * math.cos(theta)
-        y = CENTER[1] + r * math.sin(theta)
+        # Cartesian coordinates
+        x = CENTER[0] + game.r * math.cos(game.theta)
+        y = CENTER[1] + game.r * math.sin(game.theta)
 
-        # Check collision with obstacles
-        for obs_r, obs_theta in obstacles:
-            obs_x = CENTER[0] + obs_r * math.cos(obs_theta)
-            obs_y = CENTER[1] + obs_r * math.sin(obs_theta)
-            distance = math.hypot(x - obs_x, y - obs_y)
-            if distance < OBSTACLE_SIZE + 12:
-                game_over_reason = "You hit a traffic cone!"
-                game_active = False
+        # Collision detection
+        collision, reason = check_obstacle_collision(x, y, game.obstacles)
+        if collision:
+            game.game_over_reason = reason
+            game.game_active = False
+
+        # Store values for rendering
+        last_omega = omega
+        last_v_phys = v_phys
+        last_v_m_s = v_m_s
+        last_a_c_m = a_c_m
+        last_T = T
+        last_Fc = F_c
 
     # DRAW
-    frame_count += 1
-    draw_background(screen, frame_count)
+    game.frame_count += 1
+    draw_background(screen, game.frame_count)
     draw_racetrack(screen)
     
-    # Draw obstacles (traffic cones)
-    for obs_r, obs_theta in obstacles:
+    # Draw obstacles
+    for obs_r, obs_theta in game.obstacles:
         obs_x = CENTER[0] + obs_r * math.cos(obs_theta)
         obs_y = CENTER[1] + obs_r * math.sin(obs_theta)
         draw_traffic_cone(screen, obs_x, obs_y)
 
     # Draw car
-    draw_car(screen, int(x), int(y), theta)
+    # Need to calculate x,y if not active (use last known position)
+    car_x = CENTER[0] + game.r * math.cos(game.theta)
+    car_y = CENTER[1] + game.r * math.sin(game.theta)
+    draw_car(screen, int(car_x), int(car_y), game.theta)
 
-    # Display speed and instructions
+    # Draw physics vectors (only if active and we have values)
+    if game.game_active and 'last_omega' in locals():
+        # Tangential velocity vector
+        sign = 1 if last_omega >= 0 else -1
+        tang_dir = ( -math.sin(game.theta) * sign, math.cos(game.theta) * sign )
+        tang_len = max(30 * SCALE_FACTOR, abs(last_v_phys) * 0.08)
+        tang_end = (car_x + tang_dir[0] * tang_len, car_y + tang_dir[1] * tang_len)
+        draw_arrow(screen, (car_x, car_y), tang_end, (50, 150, 255), width=max(2, int(3 * SCALE_FACTOR)))
+        
+        # Label v
+        font_lab = pygame.font.SysFont(None, max(18, int(20 * SCALE_FACTOR)))
+        v_label = font_lab.render("v", True, (200, 230, 255))
+        screen.blit(v_label, (tang_end[0] + 6, tang_end[1] + 6))
+
+        # Centripetal acceleration vector
+        dir_to_center = (CENTER[0] - car_x, CENTER[1] - car_y)
+        dist_to_center = math.hypot(dir_to_center[0], dir_to_center[1]) or 1
+        c_unit = (dir_to_center[0] / dist_to_center, dir_to_center[1] / dist_to_center)
+        
+        a_px_s2 = last_a_c_m * game.pixels_per_meter
+        acc_len = max(20 * SCALE_FACTOR, a_px_s2 * 0.06)
+        acc_end = (car_x + c_unit[0] * acc_len, car_y + c_unit[1] * acc_len)
+        draw_arrow(screen, (car_x, car_y), acc_end, (100, 255, 100), width=max(2, int(3 * SCALE_FACTOR)))
+        
+        a_label = font_lab.render("a_c", True, (200, 255, 200))
+        screen.blit(a_label, (acc_end[0] + 6, acc_end[1] + 6))
+
+        # Centripetal Force Arrow
+        # Convert r to meters for display consistency check? No, drawing uses pixels
+        # But we need r_m for the label if we want to show it? No, label shows force.
+        # But draw_centripetal_force_arrow signature includes r_m... let's check rendering.py
+        # def draw_centripetal_force_arrow(surface, car_pos, center, Fc, r_m, v_m_s, mass):
+        # It doesn't actually use r_m in the function body! Just Fc.
+        # Wait, let me check the function in rendering.py
+        # Yes, I checked the code I wrote. It takes r_m but doesn't seem to use it for the calculation of length or label.
+        # Ah, wait. In the original code it didn't use it.
+        # Let's pass it anyway.
+        
+        r_m = game.r / game.pixels_per_meter
+        draw_centripetal_force_arrow(screen, (car_x, car_y), CENTER, last_Fc, r_m, last_v_m_s, game.mass)
+
+        # Physics Overlay
+        draw_physics_overlay(
+            screen, CENTER, (car_x, car_y), game.theta, game.r, 
+            last_omega, last_v_m_s, last_a_c_m, last_T, last_Fc,
+            game.mass, game.pixels_per_meter
+        )
+        
+        # Force Meter
+        draw_force_meter(screen, last_Fc, last_v_m_s, r_m, game.mass)
+
+    # UI Text
     font_size = max(24, int(32 * SCALE_FACTOR))
     font = pygame.font.SysFont(None, font_size, bold=True)
-    text = font.render(f"Speed: {int(speed)} km/h | Laps: {completed_revolutions}", True, (255, 255, 255))
-    # Add shadow effect
-    shadow = font.render(f"Speed: {int(speed)} km/h | Laps: {completed_revolutions}", True, (0, 0, 0))
+    text = font.render(f"Speed: {int(game.speed)} km/h | Laps: {game.completed_revolutions}", True, (255, 255, 255))
+    shadow = font.render(f"Speed: {int(game.speed)} km/h | Laps: {game.completed_revolutions}", True, (0, 0, 0))
     screen.blit(shadow, (12, 12))
     screen.blit(text, (10, 10))
     
     font_small_size = max(18, int(24 * SCALE_FACTOR))
     font_small = pygame.font.SysFont(None, font_small_size)
-    instructions = font_small.render("LEFT/RIGHT arrows to move inward/outward | UP/DOWN arrows to accelerate/brake | ESC to exit", True, (255, 255, 255))
-    instructions_shadow = font_small.render("LEFT/RIGHT arrows to move inward/outward | UP/DOWN arrows to accelerate/brake | ESC to exit", True, (0, 0, 0))
+    instr = "LEFT/RIGHT arrows to move inward/outward | UP/DOWN arrows to accelerate/brake | ESC to exit"
+    instructions = font_small.render(instr, True, (255, 255, 255))
+    instructions_shadow = font_small.render(instr, True, (0, 0, 0))
     screen.blit(instructions_shadow, (12, 42))
     screen.blit(instructions, (10, 40))
 
-    # Draw game over menu if not active
-    if not game_active:
-        draw_game_over_menu(screen, game_over_reason, completed_revolutions)
+    # Game Over Menu
+    if not game.game_active:
+        draw_game_over_menu(screen, game.game_over_reason, game.completed_revolutions)
 
     pygame.display.update()
 
